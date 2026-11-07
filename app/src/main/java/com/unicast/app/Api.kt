@@ -28,6 +28,8 @@ data class Episode(
     @SerialName("file_path") val filePath: String,
     @SerialName("duration_seconds") val durationSeconds: Int? = null,
     @SerialName("created_at") val createdAt: String = "",
+    @SerialName("play_count") val playCount: Int = 0,
+    @SerialName("download_count") val downloadCount: Int = 0,
 )
 
 @Serializable
@@ -142,6 +144,21 @@ object Api {
                 .build()
             json.decodeFromString<LiveToken>(run(request, showServerMessage = true))
         }
+
+    /** Adds one to an episode's play or download count. kind is "play" or "download". */
+    suspend fun trackEpisode(id: String, kind: String) = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject {
+            put("p_id", id)
+            put("p_kind", kind)
+        }.toString()
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/rpc/track_episode")
+            .withKeys(null)
+            .post(payload.toRequestBody(jsonType))
+            .build()
+        run(request)
+        Unit
+    }
 
     suspend fun isLive(): Boolean = withContext(Dispatchers.IO) {
         val request = Request.Builder()

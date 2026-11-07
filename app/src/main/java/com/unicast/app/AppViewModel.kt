@@ -20,6 +20,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import io.livekit.android.LiveKit
 import io.livekit.android.room.Room
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -57,6 +58,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var liveNow by mutableStateOf(false)
         private set
     var liveMode by mutableStateOf(LiveMode.None)
+        private set
+    var listenerCount by mutableStateOf(0)
         private set
 
     private var room: Room? = null
@@ -225,10 +228,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 liveNow = true
                 liveMode = LiveMode.Broadcasting
                 message = "You are live."
+                watchListenerCount()
             } catch (e: Exception) {
                 leaveRoom()
                 if (e is ApiException) report(e) else message = "Could not start the live show."
             }
+        }
+    }
+
+    /** Every 2 seconds, counts how many listeners are connected to the live room. */
+    private fun watchListenerCount() {
+        viewModelScope.launch {
+            while (liveMode == LiveMode.Broadcasting) {
+                listenerCount = room?.remoteParticipants?.size ?: 0
+                delay(2000)
+            }
+            listenerCount = 0
         }
     }
 
@@ -366,6 +381,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             togglePlayback()
         } else {
             startItem(episode.id, episode.title, MediaItem.fromUri(Api.publicUrl(episode.filePath)))
+            track(episode, "play")
+        }
+    }
+
+    /** Counts a play or download. The admin's own plays are not counted. */
+    private fun track(episode: Episode, kind: String) {
+        if (signedIn) return
+        viewModelScope.launch {
+            try {
+                Api.trackEpisode(episode.id, kind)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            }
         }
     }
 
@@ -426,6 +454,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 request.setDestinationInExternalFilesDir(context, Environment.DIRECTORY_MUSIC, fileName)
             }
             manager.enqueue(request)
+            track(episode, "download")
             message = "Download started. Check your notifications."
         } catch (e: Exception) {
             message = "Could not start the download."

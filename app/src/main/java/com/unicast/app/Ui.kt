@@ -197,6 +197,13 @@ private fun EpisodeCard(
                 "${episode.createdAt.take(10)} · ${formatTime((episode.durationSeconds ?: 0).toLong())}",
                 style = MaterialTheme.typography.bodySmall,
             )
+            if (onDelete != null) {
+                // Only the admin screen shows the counts.
+                Text(
+                    "${episode.playCount} plays · ${episode.downloadCount} downloads",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val current = vm.playingId == episode.id
@@ -362,6 +369,10 @@ private fun LiveCard(vm: AppViewModel) {
             Text("Live broadcast", style = MaterialTheme.typography.titleMedium)
             when (vm.liveMode) {
                 LiveMode.Broadcasting -> {
+                    Text(
+                        "${vm.listenerCount} listening now",
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
                     Text("You are live. Listeners can hear you. Keep this screen open.")
                     Button(
                         onClick = { vm.endLive() },
