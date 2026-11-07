@@ -15,6 +15,18 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        // Phones only. Drops the emulator-only x86 builds of the audio engine to shrink the APK.
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Store the native audio engine compressed inside the APK for a smaller download.
+            useLegacyPackaging = true
+        }
     }
 
     buildTypes {
