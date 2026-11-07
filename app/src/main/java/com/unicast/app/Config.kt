@@ -5,6 +5,9 @@ package com.unicast.app
  * Never put the service_role key or database password in this file.
  */
 object Config {
+    /** LiveKit free plan allowance, in participant minutes per month. Check LiveKit's pricing page. */
+    const val FREE_MINUTES = 5000
+
     const val SUPABASE_URL = "https://wyzswbklytklzbcmihsh.supabase.co"
     const val SUPABASE_ANON_KEY =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5enN3YmtseXRrbHpiY21paHNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ5OTU3NjMsImV4cCI6MjA5MDU3MTc2M30.VxLa0maW1uft9m4JUNf0Ndn6fVmhYYAtHqMIy0ulKe0"

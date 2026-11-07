@@ -22,6 +22,9 @@ import io.livekit.android.LiveKit
 import io.livekit.android.room.Room
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.coroutines.cancellation.CancellationException
 
 private const val PREVIEW_ID = "preview"
@@ -60,6 +63,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var liveMode by mutableStateOf(LiveMode.None)
         private set
     var listenerCount by mutableStateOf(0)
+        private set
+    var usageSeconds by mutableStateOf(0L)
         private set
 
     private var room: Room? = null
@@ -236,14 +241,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Every 2 seconds, counts how many listeners are connected to the live room. */
+    private fun monthKey(): String = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+
+    /** Loads this month's estimated usage from the database. */
+    fun refreshUsage() {
+        if (!signedIn) return
+        viewModelScope.launch {
+            try {
+                usageSeconds = Api.getUsageSeconds(ensureToken(), monthKey())
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            }
+        }
+    }
+
+    private suspend fun flushUsage(seconds: Int): Boolean = try {
+        Api.addUsage(ensureToken(), monthKey(), seconds)
+        usageSeconds += seconds
+        true
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        false
+    }
+
+    /**
+     * Every 2 seconds, counts how many listeners are connected to the live room,
+     * and adds them (plus you) to this month's minutes estimate.
+     */
     private fun watchListenerCount() {
         viewModelScope.launch {
+            var pending = 0
             while (liveMode == LiveMode.Broadcasting) {
-                listenerCount = room?.remoteParticipants?.size ?: 0
+                val listeners = room?.remoteParticipants?.size ?: 0
+                listenerCount = listeners
+                pending += (listeners + 1) * 2
+                if (pending >= 60 && flushUsage(pending)) pending = 0
+                if (pending > 3000) pending = 0
                 delay(2000)
             }
             listenerCount = 0
+            if (pending in 1..3600) flushUsage(pending)
         }
     }
 

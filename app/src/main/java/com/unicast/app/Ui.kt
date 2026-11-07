@@ -26,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -364,9 +365,27 @@ private fun LiveCard(vm: AppViewModel) {
         if (granted) vm.goLive() else vm.message = "Microphone permission is needed to go live."
     }
 
+    LaunchedEffect(Unit) { vm.refreshUsage() }
+    val usedMinutes = vm.usageSeconds / 60
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Live broadcast", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Estimated minutes used this month: $usedMinutes of ${Config.FREE_MINUTES} (free plan)",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            LinearProgressIndicator(
+                progress = { (usedMinutes.toFloat() / Config.FREE_MINUTES).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (usedMinutes >= Config.FREE_MINUTES * 0.8) {
+                Text(
+                    "You have used over 80% of your free minutes. Check LiveKit's dashboard.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             when (vm.liveMode) {
                 LiveMode.Broadcasting -> {
                     Text(

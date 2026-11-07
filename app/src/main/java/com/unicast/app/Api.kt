@@ -57,6 +57,11 @@ private data class LiveStatusRow(
     @SerialName("is_live") val isLive: Boolean = false,
 )
 
+@Serializable
+private data class UsageRow(
+    @SerialName("participant_seconds") val participantSeconds: Long = 0,
+)
+
 class ApiException(message: String, val code: Int = 0) : Exception(message)
 
 /** Talks to Supabase over plain HTTPS. All calls run off the main thread. */
@@ -154,6 +159,29 @@ object Api {
         val request = Request.Builder()
             .url("${Config.SUPABASE_URL}/rest/v1/rpc/track_episode")
             .withKeys(null)
+            .post(payload.toRequestBody(jsonType))
+            .build()
+        run(request)
+        Unit
+    }
+
+    suspend fun getUsageSeconds(token: String, month: String): Long = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/usage_minutes?select=participant_seconds&month=eq.$month")
+            .withKeys(token)
+            .get()
+            .build()
+        json.decodeFromString<List<UsageRow>>(run(request)).firstOrNull()?.participantSeconds ?: 0L
+    }
+
+    suspend fun addUsage(token: String, month: String, seconds: Int) = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject {
+            put("p_month", month)
+            put("p_seconds", seconds)
+        }.toString()
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/rpc/add_usage")
+            .withKeys(token)
             .post(payload.toRequestBody(jsonType))
             .build()
         run(request)
