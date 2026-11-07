@@ -1,0 +1,162 @@
+package com.unicast.app
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+
+@Serializable
+data class Episode(
+    val id: String,
+    val title: String,
+    @SerialName("file_path") val filePath: String,
+    @SerialName("duration_seconds") val durationSeconds: Int? = null,
+    @SerialName("created_at") val createdAt: String = "",
+)
+
+@Serializable
+data class Session(
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("refresh_token") val refreshToken: String,
+    @SerialName("expires_in") val expiresIn: Long = 3600,
+)
+
+@Serializable
+private data class NewEpisode(
+    val title: String,
+    @SerialName("file_path") val filePath: String,
+    @SerialName("duration_seconds") val durationSeconds: Int,
+)
+
+class ApiException(message: String, val code: Int = 0) : Exception(message)
+
+/** Talks to Supabase over plain HTTPS. All calls run off the main thread. */
+object Api {
+    private val json = Json { ignoreUnknownKeys = true }
+    private val jsonType = "application/json".toMediaType()
+    private val audioType = "audio/ogg".toMediaType()
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .build()
+
+    fun publicUrl(filePath: String): String =
+        "${Config.SUPABASE_URL}/storage/v1/object/public/episodes/$filePath"
+
+    private fun Request.Builder.withKeys(token: String?): Request.Builder =
+        header("apikey", Config.SUPABASE_ANON_KEY)
+            .header("Authorization", "Bearer ${token ?: Config.SUPABASE_ANON_KEY}")
+
+    private fun run(request: Request, loginCall: Boolean = false): String {
+        try {
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    throw ApiException(friendlyError(response.code, loginCall), response.code)
+                }
+                return body
+            }
+        } catch (e: IOException) {
+            throw ApiException("No internet connection. Please try again.")
+        }
+    }
+
+    private fun friendlyError(code: Int, loginCall: Boolean): String = when {
+        loginCall && code in 400..403 -> "Wrong email or password."
+        code == 401 || code == 403 -> "You are not allowed to do that. Please sign in again."
+        code == 404 -> "Not found."
+        code >= 500 -> "The server had a problem. Please try again soon."
+        else -> "Something went wrong (error $code)."
+    }
+
+    suspend fun listEpisodes(): List<Episode> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/episodes?select=*&order=created_at.desc")
+            .withKeys(null)
+            .get()
+            .build()
+        json.decodeFromString<List<Episode>>(run(request))
+    }
+
+    suspend fun signIn(email: String, password: String): Session = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject {
+            put("email", email)
+            put("password", password)
+        }.toString()
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/auth/v1/token?grant_type=password")
+            .withKeys(null)
+            .post(payload.toRequestBody(jsonType))
+            .build()
+        json.decodeFromString<Session>(run(request, loginCall = true))
+    }
+
+    suspend fun refresh(refreshToken: String): Session = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject { put("refresh_token", refreshToken) }.toString()
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token")
+            .withKeys(null)
+            .post(payload.toRequestBody(jsonType))
+            .build()
+        json.decodeFromString<Session>(run(request))
+    }
+
+    suspend fun uploadAudio(token: String, path: String, file: File) = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/storage/v1/object/episodes/$path")
+            .withKeys(token)
+            .post(file.asRequestBody(audioType))
+            .build()
+        run(request)
+        Unit
+    }
+
+    suspend fun insertEpisode(token: String, title: String, path: String, seconds: Int) =
+        withContext(Dispatchers.IO) {
+            val payload = json.encodeToString(NewEpisode(title, path, seconds))
+            val request = Request.Builder()
+                .url("${Config.SUPABASE_URL}/rest/v1/episodes")
+                .withKeys(token)
+                .header("Prefer", "return=minimal")
+                .post(payload.toRequestBody(jsonType))
+                .build()
+            run(request)
+            Unit
+        }
+
+    suspend fun deleteEpisode(token: String, episode: Episode) = withContext(Dispatchers.IO) {
+        val row = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/episodes?id=eq.${episode.id}")
+            .withKeys(token)
+            .delete()
+            .build()
+        run(row)
+
+        // Remove the audio file too. If this fails the episode is already gone from the list.
+        try {
+            val file = Request.Builder()
+                .url("${Config.SUPABASE_URL}/storage/v1/object/episodes/${episode.filePath}")
+                .withKeys(token)
+                .delete()
+                .build()
+            run(file)
+        } catch (_: ApiException) {
+        }
+        Unit
+    }
+}
