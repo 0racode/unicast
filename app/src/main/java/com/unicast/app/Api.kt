@@ -133,10 +133,10 @@ object Api {
     suspend fun fetchLiveToken(broadcaster: Boolean, userToken: String?): LiveToken =
         withContext(Dispatchers.IO) {
             val payload = buildJsonObject {
-                put("role", if (broadcaster) "broadcaster" else "listener")
+                put("p_role", if (broadcaster) "broadcaster" else "listener")
             }.toString()
             val request = Request.Builder()
-                .url("${Config.SUPABASE_URL}/functions/v1/livekit-token")
+                .url("${Config.SUPABASE_URL}/rest/v1/rpc/livekit_token")
                 .withKeys(userToken)
                 .post(payload.toRequestBody(jsonType))
                 .build()
