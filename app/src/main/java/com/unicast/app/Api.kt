@@ -44,6 +44,17 @@ private data class NewEpisode(
     @SerialName("duration_seconds") val durationSeconds: Int,
 )
 
+@Serializable
+data class LiveToken(
+    val token: String,
+    val url: String,
+)
+
+@Serializable
+private data class LiveStatusRow(
+    @SerialName("is_live") val isLive: Boolean = false,
+)
+
 class ApiException(message: String, val code: Int = 0) : Exception(message)
 
 /** Talks to Supabase over plain HTTPS. All calls run off the main thread. */
@@ -65,12 +76,19 @@ object Api {
         header("apikey", Config.SUPABASE_ANON_KEY)
             .header("Authorization", "Bearer ${token ?: Config.SUPABASE_ANON_KEY}")
 
-    private fun run(request: Request, loginCall: Boolean = false): String {
+    private fun run(
+        request: Request,
+        loginCall: Boolean = false,
+        showServerMessage: Boolean = false,
+    ): String {
         try {
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    throw ApiException(friendlyError(response.code, loginCall, body), response.code)
+                    throw ApiException(
+                        friendlyError(response.code, loginCall, showServerMessage, body),
+                        response.code,
+                    )
                 }
                 return body
             }
@@ -82,13 +100,20 @@ object Api {
     /** Pulls the human-readable reason out of a Supabase error response, if there is one. */
     private fun serverMessage(body: String): String? = runCatching {
         val obj = json.parseToJsonElement(body).jsonObject
-        listOf("error_description", "msg", "message")
+        listOf("error_description", "msg", "message", "error")
             .firstNotNullOfOrNull { obj[it]?.jsonPrimitive?.contentOrNull }
     }.getOrNull()
 
-    private fun friendlyError(code: Int, loginCall: Boolean, body: String): String {
+    private fun friendlyError(
+        code: Int,
+        loginCall: Boolean,
+        showServerMessage: Boolean,
+        body: String,
+    ): String {
         val server = serverMessage(body).orEmpty()
         return when {
+            showServerMessage && code == 404 -> "Live streaming is not set up yet."
+            showServerMessage && server.isNotEmpty() -> server
             loginCall && server.contains("not confirmed", ignoreCase = true) ->
                 "This email is not confirmed yet. Confirm the user in Supabase, then try again."
             loginCall && code in 400..403 ->
@@ -102,6 +127,41 @@ object Api {
             code >= 500 -> "The server had a problem. Please try again soon."
             else -> "Something went wrong (error $code)."
         }
+    }
+
+    /** Asks the token server for a LiveKit token. The broadcaster token needs the admin's login. */
+    suspend fun fetchLiveToken(broadcaster: Boolean, userToken: String?): LiveToken =
+        withContext(Dispatchers.IO) {
+            val payload = buildJsonObject {
+                put("role", if (broadcaster) "broadcaster" else "listener")
+            }.toString()
+            val request = Request.Builder()
+                .url("${Config.SUPABASE_URL}/functions/v1/livekit-token")
+                .withKeys(userToken)
+                .post(payload.toRequestBody(jsonType))
+                .build()
+            json.decodeFromString<LiveToken>(run(request, showServerMessage = true))
+        }
+
+    suspend fun isLive(): Boolean = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/live_status?select=is_live&id=eq.1")
+            .withKeys(null)
+            .get()
+            .build()
+        json.decodeFromString<List<LiveStatusRow>>(run(request)).firstOrNull()?.isLive ?: false
+    }
+
+    suspend fun setLive(token: String, live: Boolean) = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject { put("is_live", live) }.toString()
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/live_status?id=eq.1")
+            .withKeys(token)
+            .header("Prefer", "return=minimal")
+            .patch(payload.toRequestBody(jsonType))
+            .build()
+        run(request)
+        Unit
     }
 
     suspend fun listEpisodes(): List<Episode> = withContext(Dispatchers.IO) {

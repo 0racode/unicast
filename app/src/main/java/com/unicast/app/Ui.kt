@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -112,8 +113,16 @@ fun UnicastApp(vm: AppViewModel = viewModel()) {
 @Composable
 private fun HomeScreen(vm: AppViewModel) {
     LaunchedEffect(Unit) { vm.loadEpisodes() }
+    // Check every 10 seconds whether a live show has started.
+    LaunchedEffect(Unit) {
+        while (true) {
+            vm.refreshLiveStatus()
+            delay(10_000)
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
+        LiveBanner(vm)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -138,6 +147,37 @@ private fun HomeScreen(vm: AppViewModel) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(vm.episodes, key = { it.id }) { ep -> EpisodeCard(vm, ep) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveBanner(vm: AppViewModel) {
+    if (!vm.liveNow && vm.liveMode == LiveMode.None) return
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(16.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("LIVE NOW", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    when (vm.liveMode) {
+                        LiveMode.None -> "A live show is on. Tap Listen to join."
+                        LiveMode.Connecting -> "Connecting..."
+                        LiveMode.Listening -> "You are listening live."
+                        LiveMode.Broadcasting -> "You are broadcasting. Manage it in admin."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            when (vm.liveMode) {
+                LiveMode.None -> Button(onClick = { vm.listenLive() }) { Text("Listen") }
+                LiveMode.Listening, LiveMode.Connecting ->
+                    OutlinedButton(onClick = { vm.stopListening() }) { Text("Stop") }
+                LiveMode.Broadcasting -> {}
             }
         }
     }
@@ -264,7 +304,13 @@ private fun LoginForm(vm: AppViewModel) {
 
 @Composable
 private fun AdminPanel(vm: AppViewModel) {
+    val view = LocalView.current
     LaunchedEffect(Unit) { vm.loadEpisodes() }
+    LaunchedEffect(Unit) { vm.refreshLiveStatus() }
+    // Keep the screen on while recording or broadcasting.
+    LaunchedEffect(vm.recording, vm.liveMode) {
+        view.keepScreenOn = vm.recording || vm.liveMode == LiveMode.Broadcasting
+    }
     var toDelete by remember { mutableStateOf<Episode?>(null) }
 
     LazyColumn(
@@ -278,6 +324,7 @@ private fun AdminPanel(vm: AppViewModel) {
                 TextButton(onClick = { vm.signOut() }) { Text("Sign out") }
             }
         }
+        item { LiveCard(vm) }
         item { RecorderCard(vm) }
         item { Text("Your episodes", style = MaterialTheme.typography.titleMedium) }
         items(vm.episodes, key = { it.id }) { ep ->
@@ -302,14 +349,61 @@ private fun AdminPanel(vm: AppViewModel) {
 }
 
 @Composable
+private fun LiveCard(vm: AppViewModel) {
+    val context = LocalContext.current
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) vm.goLive() else vm.message = "Microphone permission is needed to go live."
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Live broadcast", style = MaterialTheme.typography.titleMedium)
+            when (vm.liveMode) {
+                LiveMode.Broadcasting -> {
+                    Text("You are live. Listeners can hear you. Keep this screen open.")
+                    Button(
+                        onClick = { vm.endLive() },
+                        enabled = !vm.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("End live") }
+                }
+                LiveMode.Connecting -> Text("Connecting...")
+                LiveMode.Listening -> Text("You are listening to the live show. Stop it on the home screen first.")
+                LiveMode.None -> {
+                    if (vm.liveNow) {
+                        Text("The live flag is still on from an earlier session.")
+                        OutlinedButton(
+                            onClick = { vm.endLive() },
+                            enabled = !vm.busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Mark as offline") }
+                    }
+                    Button(
+                        onClick = {
+                            val granted = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (granted) vm.goLive() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        enabled = !vm.recording && !vm.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Go live") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun RecorderCard(vm: AppViewModel) {
     val context = LocalContext.current
-    val view = LocalView.current
     var seconds by remember { mutableLongStateOf(0L) }
 
-    // Keep the screen on while recording, and update the timer.
+    // Update the recording timer.
     LaunchedEffect(vm.recording) {
-        view.keepScreenOn = vm.recording
         while (vm.recording) {
             seconds = vm.recordingSeconds()
             delay(500)

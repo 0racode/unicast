@@ -3,6 +3,7 @@ package com.unicast.app
 import android.app.Application
 import android.app.DownloadManager
 import android.content.Context
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -17,10 +18,14 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import io.livekit.android.LiveKit
+import io.livekit.android.room.Room
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
 private const val PREVIEW_ID = "preview"
+
+enum class LiveMode { None, Connecting, Listening, Broadcasting }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -49,6 +54,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var isPlaying by mutableStateOf(false)
         private set
+    var liveNow by mutableStateOf(false)
+        private set
+    var liveMode by mutableStateOf(LiveMode.None)
+        private set
+
+    private var room: Room? = null
 
     val recordingSupported: Boolean get() = recorder.supported
 
@@ -130,8 +141,111 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun signOut() {
+        if (liveMode == LiveMode.Broadcasting) {
+            message = "End the live show first."
+            return
+        }
         discardRecording()
         setSession(null)
+    }
+
+    // ---------- live streaming ----------
+
+    fun refreshLiveStatus() {
+        viewModelScope.launch {
+            try {
+                liveNow = Api.isLive()
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            }
+        }
+    }
+
+    private fun leaveRoom() {
+        room?.let {
+            runCatching { it.disconnect() }
+            runCatching { it.release() }
+        }
+        room = null
+        liveMode = LiveMode.None
+    }
+
+    @Suppress("DEPRECATION")
+    private fun useSpeaker() {
+        runCatching {
+            val audio = getApplication<Application>().getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audio.isSpeakerphoneOn = true
+        }
+    }
+
+    /** Joins the live room as a listener. Listener tokens cannot publish. */
+    fun listenLive() {
+        if (liveMode != LiveMode.None) return
+        stopPlayback()
+        viewModelScope.launch {
+            liveMode = LiveMode.Connecting
+            try {
+                val live = Api.fetchLiveToken(broadcaster = false, userToken = null)
+                val r = LiveKit.create(getApplication<Application>().applicationContext)
+                room = r
+                val result: Any? = r.connect(live.url, live.token)
+                if (result is Result<*> && result.isFailure) {
+                    throw result.exceptionOrNull() ?: IllegalStateException("connect failed")
+                }
+                useSpeaker()
+                liveMode = LiveMode.Listening
+            } catch (e: Exception) {
+                leaveRoom()
+                if (e is ApiException) report(e) else message = "Could not join the live show."
+            }
+        }
+    }
+
+    fun stopListening() {
+        if (liveMode == LiveMode.Listening || liveMode == LiveMode.Connecting) leaveRoom()
+    }
+
+    /** Starts broadcasting your microphone and tells listeners you are live. */
+    fun goLive() {
+        if (liveMode != LiveMode.None || recording) return
+        stopPlayback()
+        viewModelScope.launch {
+            liveMode = LiveMode.Connecting
+            try {
+                val userToken = ensureToken()
+                val live = Api.fetchLiveToken(broadcaster = true, userToken = userToken)
+                val r = LiveKit.create(getApplication<Application>().applicationContext)
+                room = r
+                val result: Any? = r.connect(live.url, live.token)
+                if (result is Result<*> && result.isFailure) {
+                    throw result.exceptionOrNull() ?: IllegalStateException("connect failed")
+                }
+                r.localParticipant.setMicrophoneEnabled(true)
+                Api.setLive(userToken, true)
+                liveNow = true
+                liveMode = LiveMode.Broadcasting
+                message = "You are live."
+            } catch (e: Exception) {
+                leaveRoom()
+                if (e is ApiException) report(e) else message = "Could not start the live show."
+            }
+        }
+    }
+
+    /** Stops broadcasting (or just clears a stale live flag) and tells listeners you are offline. */
+    fun endLive() {
+        viewModelScope.launch {
+            busy = true
+            leaveRoom()
+            try {
+                Api.setLive(ensureToken(), false)
+                liveNow = false
+            } catch (e: Exception) {
+                report(e)
+            } finally {
+                busy = false
+            }
+        }
     }
 
     // ---------- recording and upload ----------
@@ -322,6 +436,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         player?.release()
         player = null
         recorder.cancel()
+        room?.let {
+            runCatching { it.disconnect() }
+            runCatching { it.release() }
+        }
+        room = null
         super.onCleared()
     }
 }
