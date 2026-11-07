@@ -8,6 +8,9 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -67,7 +70,7 @@ object Api {
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    throw ApiException(friendlyError(response.code, loginCall), response.code)
+                    throw ApiException(friendlyError(response.code, loginCall, body), response.code)
                 }
                 return body
             }
@@ -76,12 +79,29 @@ object Api {
         }
     }
 
-    private fun friendlyError(code: Int, loginCall: Boolean): String = when {
-        loginCall && code in 400..403 -> "Wrong email or password."
-        code == 401 || code == 403 -> "You are not allowed to do that. Please sign in again."
-        code == 404 -> "Not found."
-        code >= 500 -> "The server had a problem. Please try again soon."
-        else -> "Something went wrong (error $code)."
+    /** Pulls the human-readable reason out of a Supabase error response, if there is one. */
+    private fun serverMessage(body: String): String? = runCatching {
+        val obj = json.parseToJsonElement(body).jsonObject
+        listOf("error_description", "msg", "message")
+            .firstNotNullOfOrNull { obj[it]?.jsonPrimitive?.contentOrNull }
+    }.getOrNull()
+
+    private fun friendlyError(code: Int, loginCall: Boolean, body: String): String {
+        val server = serverMessage(body).orEmpty()
+        return when {
+            loginCall && server.contains("not confirmed", ignoreCase = true) ->
+                "This email is not confirmed yet. Confirm the user in Supabase, then try again."
+            loginCall && code in 400..403 ->
+                if (server.isEmpty() || server.contains("invalid login", ignoreCase = true)) {
+                    "Wrong email or password."
+                } else {
+                    server
+                }
+            code == 401 || code == 403 -> "You are not allowed to do that. Please sign in again."
+            code == 404 -> "Not found."
+            code >= 500 -> "The server had a problem. Please try again soon."
+            else -> "Something went wrong (error $code)."
+        }
     }
 
     suspend fun listEpisodes(): List<Episode> = withContext(Dispatchers.IO) {
