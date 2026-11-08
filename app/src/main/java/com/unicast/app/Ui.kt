@@ -629,6 +629,12 @@ private fun LiveCard(vm: AppViewModel) {
                         if (vm.micOn) "You are live. Listeners can hear you, even if you lock the screen."
                         else "You are live, but your microphone is muted. Listeners cannot hear you.",
                     )
+                    if (vm.liveRecording) {
+                        Text(
+                            "Recording your voice so this show can be saved as an episode.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     OutlinedButton(
                         onClick = { vm.toggleHostMic() },
                         modifier = Modifier.fillMaxWidth(),

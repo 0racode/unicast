@@ -1,1 +1,1 @@
-- Episodes now play louder and clearer, so quiet voices are easier to hear.
+- Live shows can now be replayed afterwards as episodes.

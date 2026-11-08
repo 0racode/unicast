@@ -65,6 +65,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var recordingPaused by mutableStateOf(false)
         private set
     var pendingRecording by mutableStateOf<RecordingResult?>(null)
+    /** True while your own voice is also being recorded during a live show. */
+    var liveRecording by mutableStateOf(false)
+        private set
         private set
     var playingId by mutableStateOf<String?>(null)
         private set
@@ -545,6 +548,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 r.localParticipant.setMicrophoneEnabled(target)
                 micOn = target
+                if (liveRecording) {
+                    if (target) recorder.resume() else recorder.pause()
+                }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 message = "Could not change the microphone. Try again."
@@ -603,10 +609,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 liveNow = true
                 liveMode = LiveMode.Broadcasting
                 message = "You are live."
+                startLiveRecording()
                 refreshService()
                 watchListenerCount()
                 sendLiveNotification(userToken)
             } catch (e: Exception) {
+                if (liveRecording) {
+                    recorder.cancel()
+                    liveRecording = false
+                }
                 leaveRoom()
                 if (e is ApiException) report(e) else message = "Could not start the live show."
             }
@@ -682,6 +693,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun endLive() {
         viewModelScope.launch {
             busy = true
+            finishLiveRecording()
             leaveRoom()
             try {
                 val token = ensureToken()
@@ -698,7 +710,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- recording and upload ----------
 
+    /** Records your voice while you are live, so the show can be saved as an episode. */
+    private fun startLiveRecording() {
+        if (!recorder.supported || recording || pendingRecording != null) {
+            if (pendingRecording != null) {
+                message = "You are live. This show will not be saved because a recording is waiting to be uploaded."
+            }
+            return
+        }
+        try {
+            recorder.start()
+            liveRecording = true
+        } catch (e: Exception) {
+            liveRecording = false
+            message = "You are live, but this show could not be recorded."
+        }
+    }
+
+    /** Stops the live recording and keeps it ready to be uploaded as an episode. */
+    private fun finishLiveRecording() {
+        if (!liveRecording) return
+        liveRecording = false
+        val result = recorder.stop()
+        if (result == null) {
+            message = "The live show was too short to save."
+        } else {
+            pendingRecording = result
+            message = "Live show saved. Open the recorder, add a title and upload it as an episode."
+        }
+    }
+
     fun startRecording() {
+        if (liveMode != LiveMode.None) {
+            message = "You cannot start a new recording while live."
+            return
+        }
         stopPlayback()
         try {
             recorder.start()
