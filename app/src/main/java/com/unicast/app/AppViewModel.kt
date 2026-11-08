@@ -65,9 +65,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var recordingPaused by mutableStateOf(false)
         private set
     var pendingRecording by mutableStateOf<RecordingResult?>(null)
+        private set
     /** True while your own voice is also being recorded during a live show. */
     var liveRecording by mutableStateOf(false)
-        private set
         private set
     var playingId by mutableStateOf<String?>(null)
         private set
