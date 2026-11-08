@@ -1,1 +1,1 @@
-- Test release to check that in-app updates work. Nothing else has changed.
+- Fixed: the first time you update, after allowing Unicast to install apps, the update now continues by itself when you return.

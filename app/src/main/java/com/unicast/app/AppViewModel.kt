@@ -121,6 +121,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         lastUpdateCheck = now
         viewModelScope.launch {
             update = Updater.check(getApplication<Application>())
+            // The app may have been restarted by Android while the person allowed installs.
+            continuePendingUpdate()
+        }
+    }
+
+    /** Called whenever the app comes back to the front. */
+    fun onAppResumed() = continuePendingUpdate()
+
+    /**
+     * If the person left to allow "install unknown apps", carry on with the update
+     * as soon as they return, without making them tap Update again.
+     */
+    private fun continuePendingUpdate() {
+        if (update == null || !prefs.getBoolean("pending_update", false)) return
+        prefs.edit().remove("pending_update").apply()
+        if (Updater.canInstall(getApplication<Application>())) {
+            startUpdate()
+        } else {
+            message = "Installing apps is not allowed yet. Tap Update to try again."
+        }
+    }
+
+    /** Sends the person to Android's "allow installs" screen and remembers to carry on after. */
+    private fun askInstallPermission() {
+        val app = getApplication<Application>()
+        prefs.edit().putBoolean("pending_update", true).apply()
+        message = "Allow Unicast to install apps, then come back. The update will start by itself."
+        try {
+            Updater.openInstallPermissionSettings(app)
+        } catch (e: Exception) {
+            prefs.edit().remove("pending_update").apply()
+            message = "Open Settings, find Unicast, and allow installing apps."
         }
     }
 
@@ -129,6 +161,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (updateProgress >= 0) return
         if (liveMode == LiveMode.Broadcasting) {
             message = "Finish your live show before updating."
+            return
+        }
+        // Ask for permission first, so nothing is lost if Android restarts the app.
+        if (!Updater.canInstall(getApplication<Application>())) {
+            askInstallPermission()
             return
         }
         viewModelScope.launch {
@@ -148,12 +185,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun installUpdate() {
         val app = getApplication<Application>()
         if (!Updater.canInstall(app)) {
-            message = "Allow Unicast to install apps, then come back and tap Install."
-            try {
-                Updater.openInstallPermissionSettings(app)
-            } catch (e: Exception) {
-                message = "Open Settings, find Unicast, and allow installing apps."
-            }
+            askInstallPermission()
             return
         }
         try {

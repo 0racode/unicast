@@ -55,6 +55,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 
@@ -79,6 +81,9 @@ fun UnicastApp(vm: AppViewModel = viewModel()) {
     }
 
     BackHandler(enabled = onAdmin) { onAdmin = false }
+
+    // After the person allows "install unknown apps" and returns, carry on with the update.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.onAppResumed() }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
