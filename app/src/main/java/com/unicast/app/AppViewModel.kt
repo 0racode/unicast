@@ -510,6 +510,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The host mutes or unmutes their own microphone during a live show. */
+    fun toggleHostMic() {
+        if (liveMode != LiveMode.Broadcasting) return
+        val r = room ?: return
+        val target = !micOn
+        viewModelScope.launch {
+            try {
+                r.localParticipant.setMicrophoneEnabled(target)
+                micOn = target
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                message = "Could not change the microphone. Try again."
+            }
+        }
+    }
+
     /** The listener finishes (or cancels) their turn. */
     fun finishSpeaking() {
         val id = handId
@@ -556,6 +572,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     throw result.exceptionOrNull() ?: IllegalStateException("connect failed")
                 }
                 r.localParticipant.setMicrophoneEnabled(true)
+                micOn = true
                 Api.setLive(userToken, true)
                 liveNow = true
                 liveMode = LiveMode.Broadcasting

@@ -591,7 +591,14 @@ private fun LiveCard(vm: AppViewModel) {
                         "${vm.listenerCount} listening now",
                         style = MaterialTheme.typography.headlineMedium,
                     )
-                    Text("You are live. Listeners can hear you, even if you lock the screen.")
+                    Text(
+                        if (vm.micOn) "You are live. Listeners can hear you, even if you lock the screen."
+                        else "You are live, but your microphone is muted. Listeners cannot hear you.",
+                    )
+                    OutlinedButton(
+                        onClick = { vm.toggleHostMic() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(if (vm.micOn) "Mute my mic" else "Unmute my mic") }
                     Button(
                         onClick = { vm.endLive() },
                         enabled = !vm.busy,
