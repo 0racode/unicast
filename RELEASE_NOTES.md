@@ -1,1 +1,1 @@
-- Live shows can now be replayed afterwards as episodes.
+- Replays of live shows now include guest speakers, not just the host.

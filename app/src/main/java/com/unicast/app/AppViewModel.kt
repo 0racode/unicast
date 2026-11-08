@@ -23,6 +23,9 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import io.livekit.android.LiveKit
 import io.livekit.android.room.Room
+import io.livekit.android.room.track.AudioTrack as LiveAudioTrack
+import io.livekit.android.room.track.Track
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -48,6 +51,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var expiresAtMs = 0L
     private var player: ExoPlayer? = null
     private var loudness: LoudnessEnhancer? = null
+    private val mixer = LiveMixRecorder()
+    private var mixJob: Job? = null
     private var lastPositionSave = 0L
     private var serviceRunning = false
 
@@ -548,6 +553,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 r.localParticipant.setMicrophoneEnabled(target)
                 micOn = target
+                mixer.setHostMuted(!target)
                 if (liveRecording) {
                     if (target) recorder.resume() else recorder.pause()
                 }
@@ -615,6 +621,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 sendLiveNotification(userToken)
             } catch (e: Exception) {
                 if (liveRecording) {
+                    mixJob?.cancel()
+                    mixer.cancel()
                     recorder.cancel()
                     liveRecording = false
                 }
@@ -724,6 +732,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             liveRecording = false
             message = "You are live, but this show could not be recorded."
+            return
+        }
+        // Also record the mix of everyone's voices. If it fails, the plain recording above is used.
+        val mixFile = java.io.File(getApplication<Application>().cacheDir, "mix_${System.currentTimeMillis()}.ogg")
+        if (mixer.start(mixFile)) {
+            mixJob = viewModelScope.launch {
+                while (liveRecording) {
+                    connectMixSources()
+                    delay(1000)
+                }
+            }
+        }
+    }
+
+    /** Connects the host's mic and every guest speaker in the room to the mixed recording. */
+    private fun connectMixSources() {
+        val r = room ?: return
+        try {
+            val mic = r.localParticipant.getTrackPublication(Track.Source.MICROPHONE)?.track
+            if (mic is LiveAudioTrack) mixer.attachHost(mic)
+            for (participant in r.remoteParticipants.values.toList()) {
+                for (pub in participant.trackPublications.values.toList()) {
+                    val t = pub.track
+                    if (t is LiveAudioTrack) mixer.attachGuest(t)
+                }
+            }
+        } catch (e: Exception) {
+            // Try again on the next round.
         }
     }
 
@@ -731,7 +767,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun finishLiveRecording() {
         if (!liveRecording) return
         liveRecording = false
-        val result = recorder.stop()
+        mixJob?.cancel()
+        mixJob = null
+        val voiceOnly = recorder.stop()
+        val mixed = mixer.stop()
+        val result = if (mixed != null && mixed.seconds > 0) {
+            voiceOnly?.file?.delete()
+            mixed
+        } else {
+            voiceOnly
+        }
         if (result == null) {
             message = "The live show was too short to save."
         } else {
@@ -1023,6 +1068,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         player?.release()
         player = null
         recorder.cancel()
+        mixer.cancel()
         room?.let {
             runCatching { it.disconnect() }
             runCatching { it.release() }
