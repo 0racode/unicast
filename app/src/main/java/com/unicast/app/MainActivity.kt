@@ -18,6 +18,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        LiveNotifications.createChannel(this)
 
         // Android 13+ needs permission to show the "live" and download notifications.
         if (Build.VERSION.SDK_INT >= 33 &&

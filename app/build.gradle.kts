@@ -5,6 +5,12 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// Push notifications turn on only when the Firebase config file is present, so the app
+// still builds and works without it.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.unicast.app"
     compileSdk = 35
@@ -81,6 +87,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.4.1")
 
     implementation("io.livekit:livekit-android:2.29.1")
+
+    implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
+    implementation("com.google.firebase:firebase-messaging")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

@@ -1,1 +1,1 @@
-- Fixed: the first time you update, after allowing Unicast to install apps, the update now continues by itself when you return.
+- Going-live notifications: listeners get a push notification when you start a live show, with a switch to turn it off.

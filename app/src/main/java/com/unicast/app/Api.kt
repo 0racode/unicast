@@ -161,6 +161,17 @@ object Api {
             json.decodeFromString<LiveToken>(run(request, showServerMessage = true))
         }
 
+    /** Asks the notify-live server function to send the "Unicast is live" push. Admin only. */
+    suspend fun notifyLive(token: String) = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/functions/v1/notify-live")
+            .withKeys(token)
+            .post("{}".toRequestBody(jsonType))
+            .build()
+        run(request)
+        Unit
+    }
+
     /** Adds one to an episode's play or download count. kind is "play" or "download". */
     suspend fun trackEpisode(id: String, kind: String) = withContext(Dispatchers.IO) {
         val payload = buildJsonObject {

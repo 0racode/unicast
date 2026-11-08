@@ -105,11 +105,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val versionCode: Int = Updater.installedVersionCode(app)
     val versionName: String = Updater.installedVersionName(app)
 
+    // "Tell me when a live show starts"
+    val liveAlertsAvailable: Boolean = LiveNotifications.available(app)
+    var liveAlerts by mutableStateOf(prefs.getBoolean("live_alerts", true))
+        private set
+
     val recordingSupported: Boolean get() = recorder.supported
 
     init {
         Updater.clearDownloads(app)
+        LiveNotifications.setSubscribed(app, liveAlerts)
         restoreSession()
+    }
+
+    fun setLiveAlerts(on: Boolean) {
+        liveAlerts = on
+        prefs.edit().putBoolean("live_alerts", on).apply()
+        LiveNotifications.setSubscribed(getApplication<Application>(), on)
     }
 
     // ---------- in-app updates ----------
@@ -550,9 +562,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 message = "You are live."
                 refreshService()
                 watchListenerCount()
+                sendLiveNotification(userToken)
             } catch (e: Exception) {
                 leaveRoom()
                 if (e is ApiException) report(e) else message = "Could not start the live show."
+            }
+        }
+    }
+
+    /** Asks the server to tell everyone's phones that you are live. */
+    private fun sendLiveNotification(token: String) {
+        viewModelScope.launch {
+            try {
+                Api.notifyLive(token)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                message = if ((e as? ApiException)?.code == 404) {
+                    "You are live. Notifications are not set up yet."
+                } else {
+                    "You are live, but listeners could not be notified."
+                }
             }
         }
     }
