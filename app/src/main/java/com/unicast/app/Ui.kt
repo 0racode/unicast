@@ -114,6 +114,7 @@ fun UnicastApp(vm: AppViewModel = viewModel()) {
 @Composable
 private fun HomeScreen(vm: AppViewModel) {
     LaunchedEffect(Unit) { vm.loadEpisodes() }
+    LaunchedEffect(Unit) { vm.checkForUpdate() }
     // Check every 10 seconds whether a live show has started.
     LaunchedEffect(Unit) {
         while (true) {
@@ -123,6 +124,7 @@ private fun HomeScreen(vm: AppViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
+        UpdateCard(vm, padded = true)
         LiveBanner(vm)
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -148,6 +150,45 @@ private fun HomeScreen(vm: AppViewModel) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(vm.episodes, key = { it.id }) { ep -> EpisodeCard(vm, ep) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateCard(vm: AppViewModel, padded: Boolean) {
+    val info = vm.update ?: return
+
+    Card(
+        modifier = Modifier.fillMaxWidth().let {
+            if (padded) it.padding(horizontal = 16.dp, vertical = 8.dp) else it
+        },
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Update available", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Version ${info.versionCode}" +
+                    (if (info.sizeBytes > 0) " · ${info.sizeBytes / 1048576} MB" else ""),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (info.notes.isNotBlank()) {
+                Text("What's new", style = MaterialTheme.typography.titleSmall)
+                Text(info.notes, style = MaterialTheme.typography.bodySmall, maxLines = 10)
+            }
+            if (vm.updateProgress >= 0) {
+                LinearProgressIndicator(
+                    progress = { vm.updateProgress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("Downloading... ${vm.updateProgress}%", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { if (vm.updateReady) vm.installUpdate() else vm.startUpdate() }) {
+                        Text(if (vm.updateReady) "Install" else "Update")
+                    }
+                    TextButton(onClick = { vm.dismissUpdate() }) { Text("Later") }
+                }
             }
         }
     }
@@ -421,9 +462,13 @@ private fun AdminPanel(vm: AppViewModel) {
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("Signed in as admin", modifier = Modifier.weight(1f))
+                Text("Signed in as admin · version ${vm.versionCode}", modifier = Modifier.weight(1f))
                 TextButton(onClick = { vm.signOut() }) { Text("Sign out") }
             }
+        }
+        item {
+            LaunchedEffect(Unit) { vm.checkForUpdate() }
+            UpdateCard(vm, padded = false)
         }
         item { LiveCard(vm) }
         item { RecorderCard(vm) }

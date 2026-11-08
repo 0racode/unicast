@@ -92,10 +92,80 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private var room: Room? = null
 
+    // In-app updates
+    var update by mutableStateOf<UpdateInfo?>(null)
+        private set
+    var updateProgress by mutableStateOf(-1)
+        private set
+    var updateReady by mutableStateOf(false)
+        private set
+    private var updateDismissed = false
+    private var lastUpdateCheck = 0L
+
+    val versionCode: Int = Updater.installedVersionCode(app)
+    val versionName: String = Updater.installedVersionName(app)
+
     val recordingSupported: Boolean get() = recorder.supported
 
     init {
+        Updater.clearDownloads(app)
         restoreSession()
+    }
+
+    // ---------- in-app updates ----------
+
+    /** Looks for a newer release, at most once every 30 minutes. */
+    fun checkForUpdate() {
+        val now = System.currentTimeMillis()
+        if (updateDismissed || update != null || now - lastUpdateCheck < 30 * 60 * 1000) return
+        lastUpdateCheck = now
+        viewModelScope.launch {
+            update = Updater.check(getApplication<Application>())
+        }
+    }
+
+    fun startUpdate() {
+        val info = update ?: return
+        if (updateProgress >= 0) return
+        if (liveMode == LiveMode.Broadcasting) {
+            message = "Finish your live show before updating."
+            return
+        }
+        viewModelScope.launch {
+            updateProgress = 0
+            try {
+                Updater.download(getApplication<Application>(), info) { updateProgress = it }
+                updateReady = true
+                updateProgress = -1
+                installUpdate()
+            } catch (e: Exception) {
+                updateProgress = -1
+                report(e)
+            }
+        }
+    }
+
+    fun installUpdate() {
+        val app = getApplication<Application>()
+        if (!Updater.canInstall(app)) {
+            message = "Allow Unicast to install apps, then come back and tap Install."
+            try {
+                Updater.openInstallPermissionSettings(app)
+            } catch (e: Exception) {
+                message = "Open Settings, find Unicast, and allow installing apps."
+            }
+            return
+        }
+        try {
+            Updater.install(app, Updater.apkFile(app))
+        } catch (e: Exception) {
+            message = "Could not open the installer. Please try again."
+        }
+    }
+
+    fun dismissUpdate() {
+        updateDismissed = true
+        update = null
     }
 
     // ---------- errors ----------

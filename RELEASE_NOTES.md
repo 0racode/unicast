@@ -1,0 +1,5 @@
+- In-app updates: Unicast now tells you when a new version is ready and installs it without visiting GitHub.
+- Listeners can ask to speak during live shows, and the host can allow or end it.
+- Live shows and episodes keep playing with the screen locked.
+- Edit episode titles and descriptions, share episodes, change playback speed, and resume where you left off.
+- Pause and resume while recording.

@@ -23,20 +23,42 @@ jobs:
         with:
           gradle-version: 8.10.2
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      # The permanent signing key lives in GitHub's encrypted secrets, never in the code.
+      - name: Prepare signing key
+        id: sign
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/unicast.jks"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/unicast.jks" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No signing key secret found. Building with a temporary key and NOT publishing a release."
+          fi
+
+      - name: Build APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: >
+          gradle :app:assembleDebug --no-daemon --stacktrace
+          -PversionCode=${{ github.run_number }}
+          -PversionName=0.1.${{ github.run_number }}
 
       - name: Save the APK as a build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: unicast-debug-apk
+          name: unicast-apk
           path: app/build/outputs/apk/debug/app-debug.apk
 
+      # Only properly signed builds become releases, so the in-app updater never offers a bad one.
       - name: Publish the APK as a release
+        if: steps.sign.outputs.signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk Unicast.apk
           gh release create "build-${{ github.run_number }}" Unicast.apk \
             --title "Unicast build ${{ github.run_number }}" \
-            --notes "Debug build from commit ${{ github.sha }}. Download Unicast.apk on your phone to install."
+            --notes-file RELEASE_NOTES.md

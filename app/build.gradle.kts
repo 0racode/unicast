@@ -13,8 +13,9 @@ android {
         applicationId = "com.unicast.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // GitHub passes the build number in, so every release has a higher version than the last.
+        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = (project.findProperty("versionName") as String?) ?: "0.1.0"
 
         // Phones only. Drops the emulator-only x86 builds of the audio engine to shrink the APK.
         ndk {
@@ -29,9 +30,27 @@ android {
         }
     }
 
+    // One permanent signing key, so new versions can install over old ones.
+    // The key itself is never in this repository: GitHub supplies it while building.
+    val keystorePath: String? = System.getenv("KEYSTORE_FILE")
+    signingConfigs {
+        if (keystorePath != null) {
+            create("unicast") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = "unicast"
+                keyPassword = System.getenv("KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfigs.findByName("unicast")?.let { signingConfig = it }
+        }
         release {
             isMinifyEnabled = false
+            signingConfigs.findByName("unicast")?.let { signingConfig = it }
         }
     }
 
