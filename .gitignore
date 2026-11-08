@@ -7,5 +7,4 @@ local.properties
 *.aab
 *.jks
 *.keystore
-app/google-services.json
 .DS_Store

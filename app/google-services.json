@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "573941573254",
+    "project_id": "unicastapk",
+    "storage_bucket": "unicastapk.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:573941573254:android:366ef2f2494522c1ee9307",
+        "android_client_info": {
+          "package_name": "com.unicast.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDI0fMQLluGKODTHj0AmvvxfbWq5nxNVCI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
