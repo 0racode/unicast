@@ -3,6 +3,7 @@ package com.unicast.app
 import android.app.Application
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -10,6 +11,7 @@ import android.os.Environment
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
@@ -31,6 +33,9 @@ private const val PREVIEW_ID = "preview"
 
 enum class LiveMode { None, Connecting, Listening, Broadcasting }
 
+/** A listener's state when asking to speak during a live show. */
+enum class HandState { None, Requested, Speaking }
+
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences("unicast", Context.MODE_PRIVATE)
@@ -38,6 +43,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var session: Session? = null
     private var expiresAtMs = 0L
     private var player: ExoPlayer? = null
+    private var lastPositionSave = 0L
+    private var serviceRunning = false
 
     var episodes by mutableStateOf<List<Episode>>(emptyList())
         private set
@@ -50,6 +57,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var recording by mutableStateOf(false)
         private set
+    var recordingPaused by mutableStateOf(false)
+        private set
     var pendingRecording by mutableStateOf<RecordingResult?>(null)
         private set
     var playingId by mutableStateOf<String?>(null)
@@ -58,6 +67,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var isPlaying by mutableStateOf(false)
         private set
+    var speed by mutableStateOf(1f)
+        private set
     var liveNow by mutableStateOf(false)
         private set
     var liveMode by mutableStateOf(LiveMode.None)
@@ -65,6 +76,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var listenerCount by mutableStateOf(0)
         private set
     var usageSeconds by mutableStateOf(0L)
+        private set
+
+    // Listener side of "ask to speak"
+    var handState by mutableStateOf(HandState.None)
+        private set
+    var micOn by mutableStateOf(false)
+        private set
+    private var handId: String? = null
+    private var myIdentity = ""
+
+    // Admin side of "ask to speak"
+    var speakRequests by mutableStateOf<List<SpeakRequest>>(emptyList())
         private set
 
     private var room: Room? = null
@@ -82,6 +105,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         message = (e as? ApiException)?.message ?: "Something went wrong. Please try again."
     }
 
+    // ---------- keep running in the background ----------
+
+    /** Starts or stops the notification that keeps audio alive with the screen off. */
+    private fun refreshService() {
+        val app = getApplication<Application>()
+        val broadcasting = liveMode == LiveMode.Broadcasting
+        val listening = liveMode == LiveMode.Listening
+        val playing = isPlaying && playingId != null && playingId != PREVIEW_ID
+        val text = when {
+            broadcasting -> "You are live"
+            listening -> "Listening to the live show"
+            playing -> "Playing: $playingTitle"
+            else -> null
+        }
+        val intent = Intent(app, KeepAliveService::class.java)
+        if (text == null) {
+            if (serviceRunning) {
+                runCatching { app.stopService(intent) }
+                serviceRunning = false
+            }
+            return
+        }
+        intent.putExtra("text", text).putExtra("mic", broadcasting)
+        try {
+            ContextCompat.startForegroundService(app, intent)
+            serviceRunning = true
+        } catch (e: Exception) {
+            // Android does not allow starting it right now. Audio still works while the app is open.
+        }
+    }
+
     // ---------- episodes ----------
 
     fun loadEpisodes() {
@@ -95,6 +149,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 loading = false
             }
+        }
+    }
+
+    fun editEpisode(episode: Episode, title: String, description: String) {
+        val clean = title.trim()
+        if (clean.isEmpty()) {
+            message = "The title cannot be empty."
+            return
+        }
+        viewModelScope.launch {
+            busy = true
+            try {
+                Api.updateEpisode(ensureToken(), episode.id, clean, description.trim())
+                if (playingId == episode.id) playingTitle = clean
+                message = "Saved."
+                loadEpisodes()
+            } catch (e: Exception) {
+                report(e)
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun share(episode: Episode) {
+        val context = getApplication<Application>()
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, episode.title)
+            putExtra(
+                Intent.EXTRA_TEXT,
+                "Listen to \"${episode.title}\" on Unicast:\n${Api.publicUrl(episode.filePath)}",
+            )
+        }
+        try {
+            context.startActivity(
+                Intent.createChooser(send, "Share episode").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        } catch (e: Exception) {
+            message = "Could not open sharing."
         }
     }
 
@@ -163,6 +257,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 liveNow = Api.isLive()
+                if (!liveNow && liveMode == LiveMode.Listening) {
+                    leaveRoom()
+                    message = "The live show has ended."
+                }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
             }
@@ -176,6 +274,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         room = null
         liveMode = LiveMode.None
+        handState = HandState.None
+        handId = null
+        micOn = false
+        refreshService()
     }
 
     @Suppress("DEPRECATION")
@@ -186,7 +288,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Joins the live room as a listener. Listener tokens cannot publish. */
+    /** Joins the live room as a listener. Listener tokens cannot publish until the host allows it. */
     fun listenLive() {
         if (liveMode != LiveMode.None) return
         stopPlayback()
@@ -200,8 +302,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (result is Result<*> && result.isFailure) {
                     throw result.exceptionOrNull() ?: IllegalStateException("connect failed")
                 }
+                myIdentity = live.identity
                 useSpeaker()
                 liveMode = LiveMode.Listening
+                refreshService()
             } catch (e: Exception) {
                 leaveRoom()
                 if (e is ApiException) report(e) else message = "Could not join the live show."
@@ -211,6 +315,115 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopListening() {
         if (liveMode == LiveMode.Listening || liveMode == LiveMode.Connecting) leaveRoom()
+    }
+
+    // ----- listener asks to speak -----
+
+    fun savedName(): String = prefs.getString("display_name", "") ?: ""
+
+    fun askToSpeak(name: String) {
+        if (liveMode != LiveMode.Listening || handState != HandState.None) return
+        val clean = name.trim().ifEmpty { "Listener" }
+        prefs.edit().putString("display_name", clean).apply()
+        viewModelScope.launch {
+            try {
+                val id = Api.raiseHand(myIdentity, clean)
+                handId = id
+                handState = HandState.Requested
+                micOn = false
+                watchHand(id)
+            } catch (e: Exception) {
+                report(e)
+            }
+        }
+    }
+
+    private fun watchHand(id: String) {
+        viewModelScope.launch {
+            while (handId == id && handState != HandState.None) {
+                try {
+                    when (Api.mySpeakStatus(id)) {
+                        "approved" -> if (handState == HandState.Requested) {
+                            handState = HandState.Speaking
+                            message = "The host says you can speak. Tap Unmute."
+                        }
+                        "declined" -> {
+                            stopMicQuietly()
+                            resetHand()
+                            message = "The host could not take your question right now."
+                        }
+                        "ended" -> {
+                            val wasSpeaking = handState == HandState.Speaking
+                            stopMicQuietly()
+                            resetHand()
+                            if (wasSpeaking) message = "Your turn to speak has ended."
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                }
+                delay(2000)
+            }
+        }
+    }
+
+    private fun resetHand() {
+        handState = HandState.None
+        handId = null
+        micOn = false
+    }
+
+    private suspend fun stopMicQuietly() {
+        try {
+            room?.localParticipant?.setMicrophoneEnabled(false)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
+    }
+
+    fun toggleMic() {
+        if (handState != HandState.Speaking) return
+        val r = room ?: return
+        val target = !micOn
+        viewModelScope.launch {
+            try {
+                r.localParticipant.setMicrophoneEnabled(target)
+                micOn = target
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                message = "Could not use the microphone yet. Wait a few seconds and try again."
+            }
+        }
+    }
+
+    /** The listener finishes (or cancels) their turn. */
+    fun finishSpeaking() {
+        val id = handId
+        viewModelScope.launch {
+            stopMicQuietly()
+            resetHand()
+            if (id != null) {
+                try {
+                    Api.finishSpeaking(id)
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                }
+            }
+        }
+    }
+
+    // ----- admin handles speak requests -----
+
+    fun speakerAction(action: String, id: String) {
+        viewModelScope.launch {
+            try {
+                val token = ensureToken()
+                Api.speakerAction(token, action, id)
+                speakRequests = Api.listSpeakRequests(token)
+            } catch (e: Exception) {
+                report(e)
+            }
+        }
     }
 
     /** Starts broadcasting your microphone and tells listeners you are live. */
@@ -233,6 +446,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 liveNow = true
                 liveMode = LiveMode.Broadcasting
                 message = "You are live."
+                refreshService()
                 watchListenerCount()
             } catch (e: Exception) {
                 leaveRoom()
@@ -265,8 +479,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Every 2 seconds, counts how many listeners are connected to the live room,
-     * and adds them (plus you) to this month's minutes estimate.
+     * Every 2 seconds: counts how many listeners are connected, adds them (plus you) to this
+     * month's minutes estimate, and refreshes the list of listeners asking to speak.
      */
     private fun watchListenerCount() {
         viewModelScope.launch {
@@ -277,9 +491,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 pending += (listeners + 1) * 2
                 if (pending >= 60 && flushUsage(pending)) pending = 0
                 if (pending > 3000) pending = 0
+                try {
+                    speakRequests = Api.listSpeakRequests(ensureToken())
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                }
                 delay(2000)
             }
             listenerCount = 0
+            speakRequests = emptyList()
             if (pending in 1..3600) flushUsage(pending)
         }
     }
@@ -290,8 +510,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             busy = true
             leaveRoom()
             try {
-                Api.setLive(ensureToken(), false)
+                val token = ensureToken()
+                Api.setLive(token, false)
                 liveNow = false
+                runCatching { Api.clearSpeakRequests(token) }
             } catch (e: Exception) {
                 report(e)
             } finally {
@@ -307,6 +529,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         try {
             recorder.start()
             recording = true
+            recordingPaused = false
         } catch (e: Exception) {
             message = "Could not start recording on this phone."
         }
@@ -314,8 +537,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun recordingSeconds(): Long = recorder.elapsedSeconds()
 
+    fun pauseRecording() {
+        if (recorder.pause()) recordingPaused = true else message = "Could not pause."
+    }
+
+    fun resumeRecording() {
+        if (recorder.resume()) recordingPaused = false else message = "Could not resume."
+    }
+
     fun stopRecording() {
         recording = false
+        recordingPaused = false
         val result = recorder.stop()
         if (result == null) {
             message = "That recording was too short. Please try again."
@@ -328,13 +560,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (recording) {
             recorder.cancel()
             recording = false
+            recordingPaused = false
         }
         if (playingId == PREVIEW_ID) stopPlayback()
         pendingRecording?.file?.delete()
         pendingRecording = null
     }
 
-    fun uploadRecording(title: String) {
+    fun uploadRecording(title: String, description: String) {
         val rec = pendingRecording ?: return
         val clean = title.trim()
         if (clean.isEmpty()) {
@@ -347,7 +580,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val token = ensureToken()
                 val path = "${System.currentTimeMillis()}.ogg"
                 Api.uploadAudio(token, path, rec.file)
-                Api.insertEpisode(token, clean, path, rec.seconds)
+                Api.insertEpisode(token, clean, description.trim(), path, rec.seconds)
                 if (playingId == PREVIEW_ID) stopPlayback()
                 rec.file.delete()
                 pendingRecording = null
@@ -390,9 +623,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 .build(),
             true,
         )
+        p.setWakeMode(C.WAKE_MODE_NETWORK)
         p.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingNow: Boolean) {
                 isPlaying = isPlayingNow
+                refreshService()
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) {
+                    playingId?.let { prefs.edit().remove("pos_$it").apply() }
+                }
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -404,9 +645,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return p
     }
 
-    private fun startItem(id: String, title: String, item: MediaItem) {
+    private fun startItem(id: String, title: String, item: MediaItem, startMs: Long = 0L) {
         val p = ensurePlayer()
-        p.setMediaItem(item)
+        p.setMediaItem(item, startMs)
+        p.setPlaybackSpeed(speed)
         p.prepare()
         p.play()
         playingId = id
@@ -417,7 +659,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (playingId == episode.id) {
             togglePlayback()
         } else {
-            startItem(episode.id, episode.title, MediaItem.fromUri(Api.publicUrl(episode.filePath)))
+            val saved = prefs.getLong("pos_${episode.id}", 0L)
+            val total = (episode.durationSeconds ?: 0) * 1000L
+            val resumeAt = if (saved > 5000 && (total == 0L || saved < total - 5000)) saved else 0L
+            startItem(
+                episode.id,
+                episode.title,
+                MediaItem.fromUri(Api.publicUrl(episode.filePath)),
+                resumeAt,
+            )
+            if (resumeAt > 0) message = "Resuming from ${formatTime(resumeAt / 1000)}"
             track(episode, "play")
         }
     }
@@ -439,9 +690,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         startItem(PREVIEW_ID, "Preview of your recording", MediaItem.fromUri(Uri.fromFile(rec.file)))
     }
 
+    private fun saveResumePoint() {
+        val p = player ?: return
+        val id = playingId ?: return
+        if (id == PREVIEW_ID) return
+        prefs.edit().putLong("pos_$id", p.currentPosition).apply()
+    }
+
     fun togglePlayback() {
         val p = player ?: return
         if (p.isPlaying) {
+            saveResumePoint()
             p.pause()
         } else {
             if (p.playbackState == Player.STATE_ENDED) p.seekTo(0)
@@ -450,14 +709,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopPlayback() {
+        if (player?.playbackState != Player.STATE_ENDED) saveResumePoint()
         player?.stop()
         player?.clearMediaItems()
         playingId = null
         playingTitle = ""
         isPlaying = false
+        refreshService()
     }
 
-    fun positionMs(): Long = player?.currentPosition ?: 0L
+    fun cycleSpeed() {
+        speed = when {
+            speed < 1.1f -> 1.25f
+            speed < 1.4f -> 1.5f
+            speed < 1.9f -> 2f
+            else -> 1f
+        }
+        player?.setPlaybackSpeed(speed)
+    }
+
+    fun positionMs(): Long {
+        val p = player ?: return 0L
+        val position = p.currentPosition
+        val now = System.currentTimeMillis()
+        if (p.isPlaying && now - lastPositionSave > 5000) {
+            lastPositionSave = now
+            saveResumePoint()
+        }
+        return position
+    }
 
     fun durationMs(): Long {
         val d = player?.duration ?: C.TIME_UNSET
@@ -507,6 +787,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { it.release() }
         }
         room = null
+        runCatching {
+            getApplication<Application>().stopService(
+                Intent(getApplication<Application>(), KeepAliveService::class.java),
+            )
+        }
         super.onCleared()
     }
 }

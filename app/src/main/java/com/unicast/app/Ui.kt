@@ -157,30 +157,110 @@ private fun HomeScreen(vm: AppViewModel) {
 private fun LiveBanner(vm: AppViewModel) {
     if (!vm.liveNow && vm.liveMode == LiveMode.None) return
 
+    val context = LocalContext.current
+    var askDialog by remember { mutableStateOf(false) }
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) askDialog = true else vm.message = "Microphone permission is needed to speak."
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(16.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text("LIVE NOW", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    when (vm.liveMode) {
-                        LiveMode.None -> "A live show is on. Tap Listen to join."
-                        LiveMode.Connecting -> "Connecting..."
-                        LiveMode.Listening -> "You are listening live."
-                        LiveMode.Broadcasting -> "You are broadcasting. Manage it in admin."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                )
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("LIVE NOW", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        when (vm.liveMode) {
+                            LiveMode.None -> "A live show is on. Tap Listen to join."
+                            LiveMode.Connecting -> "Connecting..."
+                            LiveMode.Listening -> "You are listening live."
+                            LiveMode.Broadcasting -> "You are broadcasting. Manage it in admin."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                when (vm.liveMode) {
+                    LiveMode.None -> Button(onClick = { vm.listenLive() }) { Text("Listen") }
+                    LiveMode.Listening, LiveMode.Connecting ->
+                        OutlinedButton(onClick = { vm.stopListening() }) { Text("Stop") }
+                    LiveMode.Broadcasting -> {}
+                }
             }
-            when (vm.liveMode) {
-                LiveMode.None -> Button(onClick = { vm.listenLive() }) { Text("Listen") }
-                LiveMode.Listening, LiveMode.Connecting ->
-                    OutlinedButton(onClick = { vm.stopListening() }) { Text("Stop") }
-                LiveMode.Broadcasting -> {}
+
+            if (vm.liveMode == LiveMode.Listening) {
+                Spacer(Modifier.height(8.dp))
+                when (vm.handState) {
+                    HandState.None -> OutlinedButton(
+                        onClick = {
+                            val granted = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (granted) askDialog = true else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Ask to speak") }
+
+                    HandState.Requested -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Waiting for the host to let you speak...",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.finishSpeaking() }) { Text("Cancel") }
+                    }
+
+                    HandState.Speaking -> Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (vm.micOn) "Your microphone is on." else "You can speak. Your microphone is off.",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Button(onClick = { vm.toggleMic() }) {
+                                Text(if (vm.micOn) "Mute" else "Unmute")
+                            }
+                            TextButton(onClick = { vm.finishSpeaking() }) { Text("Finish") }
+                        }
+                        Text(
+                            "Use headphones while speaking so the show does not echo.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
         }
+    }
+
+    if (askDialog) {
+        var name by remember { mutableStateOf(vm.savedName()) }
+        AlertDialog(
+            onDismissRequest = { askDialog = false },
+            title = { Text("Ask to speak") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("The host will see your name and can let you speak.")
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Your name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    askDialog = false
+                    vm.askToSpeak(name)
+                }) { Text("Send request") }
+            },
+            dismissButton = { TextButton(onClick = { askDialog = false }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -190,6 +270,7 @@ private fun EpisodeCard(
     episode: Episode,
     showDownload: Boolean = true,
     onDelete: (() -> Unit)? = null,
+    onEdit: (() -> Unit)? = null,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
@@ -198,6 +279,10 @@ private fun EpisodeCard(
                 "${episode.createdAt.take(10)} · ${formatTime((episode.durationSeconds ?: 0).toLong())}",
                 style = MaterialTheme.typography.bodySmall,
             )
+            if (!episode.description.isNullOrBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(episode.description, style = MaterialTheme.typography.bodyMedium)
+            }
             if (onDelete != null) {
                 // Only the admin screen shows the counts.
                 Text(
@@ -214,6 +299,10 @@ private fun EpisodeCard(
                 if (showDownload) {
                     OutlinedButton(onClick = { vm.download(episode) }) { Text("Download") }
                 }
+                if (onEdit != null) {
+                    TextButton(onClick = onEdit, enabled = !vm.busy) { Text("Edit") }
+                }
+                TextButton(onClick = { vm.share(episode) }) { Text("Share") }
                 if (onDelete != null) {
                     TextButton(onClick = onDelete, enabled = !vm.busy) { Text("Delete") }
                 }
@@ -257,6 +346,9 @@ private fun MiniPlayer(vm: AppViewModel) {
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
                 )
+                TextButton(onClick = { vm.cycleSpeed() }) {
+                    Text("${vm.speed.toString().removeSuffix(".0")}x")
+                }
                 Button(onClick = { vm.togglePlayback() }) {
                     Text(if (vm.isPlaying) "Pause" else "Play")
                 }
@@ -320,6 +412,7 @@ private fun AdminPanel(vm: AppViewModel) {
         view.keepScreenOn = vm.recording || vm.liveMode == LiveMode.Broadcasting
     }
     var toDelete by remember { mutableStateOf<Episode?>(null) }
+    var toEdit by remember { mutableStateOf<Episode?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -336,8 +429,49 @@ private fun AdminPanel(vm: AppViewModel) {
         item { RecorderCard(vm) }
         item { Text("Your episodes", style = MaterialTheme.typography.titleMedium) }
         items(vm.episodes, key = { it.id }) { ep ->
-            EpisodeCard(vm, ep, showDownload = false, onDelete = { toDelete = ep })
+            EpisodeCard(
+                vm,
+                ep,
+                showDownload = false,
+                onDelete = { toDelete = ep },
+                onEdit = { toEdit = ep },
+            )
         }
+    }
+
+    toEdit?.let { ep ->
+        var title by remember(ep.id) { mutableStateOf(ep.title) }
+        var description by remember(ep.id) { mutableStateOf(ep.description.orEmpty()) }
+        AlertDialog(
+            onDismissRequest = { toEdit = null },
+            title = { Text("Edit episode") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        label = { Text("Title") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("Description (optional)") },
+                        minLines = 2,
+                        maxLines = 5,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.editEpisode(ep, title, description)
+                    toEdit = null
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { toEdit = null }) { Text("Cancel") } },
+        )
     }
 
     toDelete?.let { ep ->
@@ -392,12 +526,42 @@ private fun LiveCard(vm: AppViewModel) {
                         "${vm.listenerCount} listening now",
                         style = MaterialTheme.typography.headlineMedium,
                     )
-                    Text("You are live. Listeners can hear you. Keep this screen open.")
+                    Text("You are live. Listeners can hear you, even if you lock the screen.")
                     Button(
                         onClick = { vm.endLive() },
                         enabled = !vm.busy,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("End live") }
+
+                    if (vm.speakRequests.isNotEmpty()) {
+                        Text("Requests to speak", style = MaterialTheme.typography.titleSmall)
+                        vm.speakRequests.forEach { req ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(req.name)
+                                    Text(
+                                        if (req.status == "approved") "Speaking now" else "Waiting",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                if (req.status == "approved") {
+                                    OutlinedButton(onClick = { vm.speakerAction("end_speaker", req.id) }) {
+                                        Text("End")
+                                    }
+                                } else {
+                                    Button(onClick = { vm.speakerAction("approve_speaker", req.id) }) {
+                                        Text("Allow")
+                                    }
+                                    TextButton(onClick = { vm.speakerAction("decline_speaker", req.id) }) {
+                                        Text("Decline")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 LiveMode.Connecting -> Text("Connecting...")
                 LiveMode.Listening -> Text("You are listening to the live show. Stop it on the home screen first.")
@@ -455,9 +619,15 @@ private fun RecorderCard(vm: AppViewModel) {
                 !vm.recordingSupported -> Text("Recording needs Android 10 or newer.")
                 vm.recording -> {
                     Text(formatTime(seconds), style = MaterialTheme.typography.headlineMedium)
-                    Text("Keep the app open while recording.", style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = { vm.stopRecording() }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Stop recording")
+                    Text(
+                        if (vm.recordingPaused) "Paused." else "Recording. Keep the app open.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { if (vm.recordingPaused) vm.resumeRecording() else vm.pauseRecording() },
+                        ) { Text(if (vm.recordingPaused) "Resume" else "Pause") }
+                        Button(onClick = { vm.stopRecording() }) { Text("Stop recording") }
                     }
                 }
                 pending != null -> PendingRecording(vm, pending)
@@ -481,6 +651,7 @@ private fun RecorderCard(vm: AppViewModel) {
 @Composable
 private fun PendingRecording(vm: AppViewModel, rec: RecordingResult) {
     var title by remember(rec) { mutableStateOf("") }
+    var description by remember(rec) { mutableStateOf("") }
 
     Text("Recorded ${formatTime(rec.seconds.toLong())} (${rec.file.length() / 1024} KB)")
     OutlinedTextField(
@@ -490,8 +661,16 @@ private fun PendingRecording(vm: AppViewModel, rec: RecordingResult) {
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
+    OutlinedTextField(
+        value = description,
+        onValueChange = { description = it },
+        label = { Text("Description (optional)") },
+        minLines = 2,
+        maxLines = 4,
+        modifier = Modifier.fillMaxWidth(),
+    )
     Button(
-        onClick = { vm.uploadRecording(title) },
+        onClick = { vm.uploadRecording(title, description) },
         enabled = !vm.busy,
         modifier = Modifier.fillMaxWidth(),
     ) {

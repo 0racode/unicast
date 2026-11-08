@@ -30,6 +30,15 @@ data class Episode(
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("play_count") val playCount: Int = 0,
     @SerialName("download_count") val downloadCount: Int = 0,
+    val description: String? = null,
+)
+
+@Serializable
+data class SpeakRequest(
+    val id: String,
+    val identity: String,
+    val name: String,
+    val status: String,
 )
 
 @Serializable
@@ -44,12 +53,14 @@ private data class NewEpisode(
     val title: String,
     @SerialName("file_path") val filePath: String,
     @SerialName("duration_seconds") val durationSeconds: Int,
+    val description: String? = null,
 )
 
 @Serializable
 data class LiveToken(
     val token: String,
     val url: String,
+    val identity: String = "",
 )
 
 @Serializable
@@ -251,9 +262,79 @@ object Api {
         Unit
     }
 
-    suspend fun insertEpisode(token: String, title: String, path: String, seconds: Int) =
+    suspend fun updateEpisode(token: String, id: String, title: String, description: String) =
         withContext(Dispatchers.IO) {
-            val payload = json.encodeToString(NewEpisode(title, path, seconds))
+            val payload = buildJsonObject {
+                put("title", title)
+                put("description", description)
+            }.toString()
+            val request = Request.Builder()
+                .url("${Config.SUPABASE_URL}/rest/v1/episodes?id=eq.$id")
+                .withKeys(token)
+                .header("Prefer", "return=minimal")
+                .patch(payload.toRequestBody(jsonType))
+                .build()
+            run(request)
+            Unit
+        }
+
+    // ----- speak requests (listeners asking to talk during a live show) -----
+
+    private fun rpc(name: String, payload: String, token: String?): Request =
+        Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/rpc/$name")
+            .withKeys(token)
+            .post(payload.toRequestBody(jsonType))
+            .build()
+
+    suspend fun raiseHand(identity: String, name: String): String = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject {
+            put("p_identity", identity)
+            put("p_name", name)
+        }.toString()
+        json.parseToJsonElement(run(rpc("raise_hand", payload, null), showServerMessage = true))
+            .jsonPrimitive.content
+    }
+
+    suspend fun mySpeakStatus(id: String): String = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject { put("p_id", id) }.toString()
+        json.parseToJsonElement(run(rpc("my_speak_status", payload, null))).jsonPrimitive.content
+    }
+
+    suspend fun finishSpeaking(id: String) = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject { put("p_id", id) }.toString()
+        run(rpc("finish_speaking", payload, null))
+        Unit
+    }
+
+    suspend fun listSpeakRequests(token: String): List<SpeakRequest> = withContext(Dispatchers.IO) {
+        json.decodeFromString<List<SpeakRequest>>(run(rpc("list_speak_requests", "{}", token)))
+    }
+
+    /** action is one of approve_speaker, end_speaker, decline_speaker. */
+    suspend fun speakerAction(token: String, action: String, id: String) =
+        withContext(Dispatchers.IO) {
+            val payload = buildJsonObject { put("p_id", id) }.toString()
+            run(rpc(action, payload, token), showServerMessage = true)
+            Unit
+        }
+
+    suspend fun clearSpeakRequests(token: String) = withContext(Dispatchers.IO) {
+        run(rpc("clear_speak_requests", "{}", token))
+        Unit
+    }
+
+    suspend fun insertEpisode(
+        token: String,
+        title: String,
+        description: String,
+        path: String,
+        seconds: Int,
+    ) =
+        withContext(Dispatchers.IO) {
+            val payload = json.encodeToString(
+                NewEpisode(title, path, seconds, description.ifBlank { null }),
+            )
             val request = Request.Builder()
                 .url("${Config.SUPABASE_URL}/rest/v1/episodes")
                 .withKeys(token)
