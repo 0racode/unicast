@@ -5,6 +5,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -31,6 +32,9 @@ import kotlin.coroutines.cancellation.CancellationException
 
 private const val PREVIEW_ID = "preview"
 
+/** Extra loudness for episodes, in millibels (1200 = +12 dB). Lower it if voices ever crackle. */
+private const val PLAYBACK_BOOST_MB = 1200
+
 enum class LiveMode { None, Connecting, Listening, Broadcasting }
 
 /** A listener's state when asking to speak during a live show. */
@@ -43,6 +47,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var session: Session? = null
     private var expiresAtMs = 0L
     private var player: ExoPlayer? = null
+    private var loudness: LoudnessEnhancer? = null
     private var lastPositionSave = 0L
     private var serviceRunning = false
 
@@ -810,9 +815,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 message = "Could not play this audio."
                 isPlaying = false
             }
+
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                attachLoudness(audioSessionId)
+            }
         })
+        attachLoudness(p.audioSessionId)
         player = p
         return p
+    }
+
+    /** Makes quiet voices louder when playing episodes. Does nothing if the phone refuses. */
+    private fun attachLoudness(sessionId: Int) {
+        runCatching { loudness?.release() }
+        loudness = null
+        if (sessionId == C.AUDIO_SESSION_ID_UNSET || sessionId == 0) return
+        loudness = runCatching {
+            LoudnessEnhancer(sessionId).apply {
+                setTargetGain(PLAYBACK_BOOST_MB)
+                enabled = true
+            }
+        }.getOrNull()
     }
 
     private fun startItem(id: String, title: String, item: MediaItem, startMs: Long = 0L) {
@@ -949,6 +972,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        runCatching { loudness?.release() }
+        loudness = null
         player?.release()
         player = null
         recorder.cancel()
