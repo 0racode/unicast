@@ -3,7 +3,7 @@
 // Sends the "Unicast is live" push notification to every phone subscribed to the "live" topic.
 //   - Only the signed-in admin can trigger it.
 //   - Only works while the live flag is on.
-//   - Will not send again within 10 minutes, so going live twice does not spam listeners.
+//   - Will not send again within 2 minutes, so going live twice does not spam listeners.
 //
 // Secret to add in Supabase > Edge Functions > Secrets:
 //   FIREBASE_SERVICE_ACCOUNT  = the full contents of the Firebase service account JSON file
@@ -15,7 +15,7 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const ACCOUNT_JSON = Deno.env.get("FIREBASE_SERVICE_ACCOUNT") ?? "";
 
-const REPEAT_GUARD_MS = 10 * 60 * 1000;
+const REPEAT_GUARD_MS = 2 * 60 * 1000;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -121,7 +121,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Only while live, and not again within 10 minutes.
+    // Only while live, and not again within 2 minutes.
     const statusRes = await fetch(
       `${SUPABASE_URL}/rest/v1/live_status?select=is_live,last_notified_at&id=eq.1`,
       { headers: dbHeaders },
