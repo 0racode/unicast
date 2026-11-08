@@ -71,6 +71,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var pendingRecording by mutableStateOf<RecordingResult?>(null)
         private set
+    /** Title and description of the last live show, offered when you upload its recording. */
+    var suggestedTitle by mutableStateOf("")
+    var suggestedDescription by mutableStateOf("")
     /** True while your own voice is also being recorded during a live show. */
     var liveRecording by mutableStateOf(false)
         private set
@@ -82,6 +85,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var speed by mutableStateOf(1f)
         private set
+    var liveTitle by mutableStateOf("")
+        private set
+    var liveDescription by mutableStateOf("")
+        private set
+    /** What the host types before going live. */
+    var showTitle by mutableStateOf(prefs.getString("show_title", "") ?: "")
+    var showDescription by mutableStateOf(prefs.getString("show_description", "") ?: "")
     var liveNow by mutableStateOf(false)
         private set
     var liveMode by mutableStateOf(LiveMode.None)
@@ -404,7 +414,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshLiveStatus() {
         viewModelScope.launch {
             try {
-                liveNow = Api.isLive()
+                val info = Api.getLiveInfo()
+                liveNow = info.isLive
+                liveTitle = info.title
+                liveDescription = info.description
                 if (!liveNow && liveMode == LiveMode.Listening) {
                     leaveRoom()
                     message = "The live show has ended."
@@ -611,14 +624,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 r.localParticipant.setMicrophoneEnabled(true)
                 micOn = true
-                Api.setLive(userToken, true)
+                val title = showTitle.trim()
+                val details = showDescription.trim()
+                prefs.edit().putString("show_title", title).putString("show_description", details).apply()
+                Api.setLive(userToken, true, title, details)
                 liveNow = true
+                liveTitle = title
+                liveDescription = details
+                suggestedTitle = title
+                suggestedDescription = details
                 liveMode = LiveMode.Broadcasting
                 message = "You are live."
                 startLiveRecording()
                 refreshService()
                 watchListenerCount()
-                sendLiveNotification(userToken)
+                sendLiveNotification(userToken, title)
             } catch (e: Exception) {
                 if (liveRecording) {
                     mixJob?.cancel()
@@ -633,10 +653,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Asks the server to tell everyone's phones that you are live. */
-    private fun sendLiveNotification(token: String) {
+    private fun sendLiveNotification(token: String, title: String) {
         viewModelScope.launch {
             try {
-                Api.notifyLive(token)
+                Api.notifyLive(token, title)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 message = if ((e as? ApiException)?.code == 404) {
@@ -707,6 +727,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val token = ensureToken()
                 Api.setLive(token, false)
                 liveNow = false
+                liveTitle = ""
+                liveDescription = ""
                 runCatching { Api.clearSpeakRequests(token) }
             } catch (e: Exception) {
                 report(e)

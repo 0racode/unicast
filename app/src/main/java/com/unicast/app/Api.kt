@@ -66,7 +66,12 @@ data class LiveToken(
 @Serializable
 private data class LiveStatusRow(
     @SerialName("is_live") val isLive: Boolean = false,
+    val title: String? = null,
+    val description: String? = null,
 )
+
+/** Whether a live show is on, and what it is about. */
+data class LiveInfo(val isLive: Boolean, val title: String, val description: String)
 
 @Serializable
 private data class UsageRow(
@@ -162,8 +167,8 @@ object Api {
         }
 
     /** Asks the notify-live server function to send the "Unicast is live" push. Admin only. */
-    suspend fun notifyLive(token: String) = withContext(Dispatchers.IO) {
-        sendNotification(token, "{}")
+    suspend fun notifyLive(token: String, title: String = "") = withContext(Dispatchers.IO) {
+        sendNotification(token, buildJsonObject { put("title", title) }.toString())
     }
 
     /** Tells listeners' phones that a new episode was uploaded. */
@@ -223,24 +228,55 @@ object Api {
         Unit
     }
 
-    suspend fun isLive(): Boolean = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url("${Config.SUPABASE_URL}/rest/v1/live_status?select=is_live&id=eq.1")
-            .withKeys(null)
-            .get()
-            .build()
-        json.decodeFromString<List<LiveStatusRow>>(run(request)).firstOrNull()?.isLive ?: false
+    suspend fun isLive(): Boolean = getLiveInfo().isLive
+
+    /** Reads the live flag with its title and description. Works even before the new columns exist. */
+    suspend fun getLiveInfo(): LiveInfo = withContext(Dispatchers.IO) {
+        fun read(select: String): LiveStatusRow? {
+            val request = Request.Builder()
+                .url("${Config.SUPABASE_URL}/rest/v1/live_status?select=$select&id=eq.1")
+                .withKeys(null)
+                .get()
+                .build()
+            return json.decodeFromString<List<LiveStatusRow>>(run(request)).firstOrNull()
+        }
+        val row = try {
+            read("is_live,title,description")
+        } catch (e: ApiException) {
+            if (e.code != 400) throw e
+            read("is_live")
+        }
+        LiveInfo(row?.isLive ?: false, row?.title.orEmpty(), row?.description.orEmpty())
     }
 
-    suspend fun setLive(token: String, live: Boolean) = withContext(Dispatchers.IO) {
-        val payload = buildJsonObject { put("is_live", live) }.toString()
-        val request = Request.Builder()
-            .url("${Config.SUPABASE_URL}/rest/v1/live_status?id=eq.1")
-            .withKeys(token)
-            .header("Prefer", "return=minimal")
-            .patch(payload.toRequestBody(jsonType))
-            .build()
-        run(request)
+    /** Turns the live flag on or off. When going live, also publishes the show's title and description. */
+    suspend fun setLive(
+        token: String,
+        live: Boolean,
+        title: String = "",
+        description: String = "",
+    ) = withContext(Dispatchers.IO) {
+        fun send(payload: String) {
+            val request = Request.Builder()
+                .url("${Config.SUPABASE_URL}/rest/v1/live_status?id=eq.1")
+                .withKeys(token)
+                .header("Prefer", "return=minimal")
+                .patch(payload.toRequestBody(jsonType))
+                .build()
+            run(request)
+        }
+        val withDetails = buildJsonObject {
+            put("is_live", live)
+            put("title", if (live) title else "")
+            put("description", if (live) description else "")
+        }.toString()
+        try {
+            send(withDetails)
+        } catch (e: ApiException) {
+            // The title columns are not in the database yet: still go live without them.
+            if (e.code != 400) throw e
+            send(buildJsonObject { put("is_live", live) }.toString())
+        }
         Unit
     }
 

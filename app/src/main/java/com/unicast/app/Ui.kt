@@ -268,6 +268,12 @@ private fun LiveBanner(vm: AppViewModel) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("LIVE NOW", style = MaterialTheme.typography.titleMedium)
+                    if (vm.liveTitle.isNotBlank()) {
+                        Text(vm.liveTitle, style = MaterialTheme.typography.titleLarge)
+                    }
+                    if (vm.liveDescription.isNotBlank()) {
+                        Text(vm.liveDescription, style = MaterialTheme.typography.bodyMedium)
+                    }
                     Text(
                         when (vm.liveMode) {
                             LiveMode.None -> "A live show is on. Tap Listen to join."
@@ -678,6 +684,23 @@ private fun LiveCard(vm: AppViewModel) {
                 LiveMode.Connecting -> Text("Connecting...")
                 LiveMode.Listening -> Text("You are listening to the live show. Stop it on the home screen first.")
                 LiveMode.None -> {
+                    if (!vm.liveNow) {
+                        OutlinedTextField(
+                            value = vm.showTitle,
+                            onValueChange = { vm.showTitle = it },
+                            label = { Text("Show title") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = vm.showDescription,
+                            onValueChange = { vm.showDescription = it },
+                            label = { Text("What is this show about? (optional)") },
+                            minLines = 2,
+                            maxLines = 4,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     if (vm.liveNow) {
                         Text("The live flag is still on from an earlier session.")
                         OutlinedButton(
@@ -762,8 +785,8 @@ private fun RecorderCard(vm: AppViewModel) {
 
 @Composable
 private fun PendingRecording(vm: AppViewModel, rec: RecordingResult) {
-    var title by remember(rec) { mutableStateOf("") }
-    var description by remember(rec) { mutableStateOf("") }
+    var title by remember(rec) { mutableStateOf(vm.suggestedTitle) }
+    var description by remember(rec) { mutableStateOf(vm.suggestedDescription) }
 
     Text("Recorded ${formatTime(rec.seconds.toLong())} (${rec.file.length() / 1024} KB)")
     OutlinedTextField(

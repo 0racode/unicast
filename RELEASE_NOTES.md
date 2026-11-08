@@ -1,1 +1,1 @@
-- Replays of live shows now include guest speakers, not just the host.
+- Live shows now show a title and description, so you know what the show is about before you join.

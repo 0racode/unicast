@@ -123,11 +123,14 @@ Deno.serve(async (req) => {
 
   let kind = "live";
   let episodeTitle = "";
+  let liveTitle = "";
   try {
     const body = await req.json();
     if (body?.type === "episode") {
       kind = "episode";
       episodeTitle = String(body.title ?? "").slice(0, 120);
+    } else {
+      liveTitle = String(body?.title ?? "").slice(0, 120);
     }
   } catch (_) {
     // No body means the go-live notification.
@@ -190,7 +193,7 @@ Deno.serve(async (req) => {
             topic: "live",
             notification: {
               title: "Unicast is live",
-              body: "A live show has started. Tap to listen.",
+              body: liveTitle || "A live show has started. Tap to listen.",
             },
             android: {
               priority: "HIGH",
