@@ -1,2 +1,4 @@
 - Going-live notifications: listeners get a push notification when you start a live show, with a switch to turn it off.
 - Host can mute and unmute their own microphone during a live show.
+- New-episode notifications, with their own switch on the home screen.
+- Title now reads "Unicast by Oracle".

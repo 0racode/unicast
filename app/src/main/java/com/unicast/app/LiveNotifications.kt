@@ -14,7 +14,9 @@ import com.google.firebase.messaging.FirebaseMessaging
  */
 object LiveNotifications {
     const val CHANNEL = "live"
+    const val EPISODES_CHANNEL = "episodes"
     private const val TOPIC = "live"
+    private const val EPISODES_TOPIC = "episodes"
 
     fun createChannel(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -22,6 +24,9 @@ object LiveNotifications {
         val channel = NotificationChannel(CHANNEL, "Live shows", NotificationManager.IMPORTANCE_HIGH)
         channel.description = "Tells you when Unicast goes live"
         manager.createNotificationChannel(channel)
+        val episodes = NotificationChannel(EPISODES_CHANNEL, "New episodes", NotificationManager.IMPORTANCE_DEFAULT)
+        episodes.description = "Tells you when a new episode is uploaded"
+        manager.createNotificationChannel(episodes)
     }
 
     /** True when the app was built with a Firebase config. */
@@ -38,6 +43,16 @@ object LiveNotifications {
             if (on) messaging.subscribeToTopic(TOPIC) else messaging.unsubscribeFromTopic(TOPIC)
         } catch (e: Exception) {
             // Google Play services missing or busy. Try again next time the app opens.
+        }
+    }
+
+    fun setEpisodesSubscribed(context: Context, on: Boolean) {
+        if (!available(context)) return
+        try {
+            val messaging = FirebaseMessaging.getInstance()
+            if (on) messaging.subscribeToTopic(EPISODES_TOPIC) else messaging.unsubscribeFromTopic(EPISODES_TOPIC)
+        } catch (e: Exception) {
+            // Try again next time the app opens.
         }
     }
 }

@@ -52,6 +52,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -91,12 +98,28 @@ fun UnicastApp(vm: AppViewModel = viewModel()) {
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        "Unicast",
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
                         modifier = Modifier.pointerInput(Unit) {
                             detectTapGestures(onLongPress = { onAdmin = true })
                         },
-                    )
+                    ) {
+                        Text("Unicast")
+                        Text(
+                            "by Oracle",
+                            modifier = Modifier.padding(start = 8.dp, bottom = 3.dp),
+                            style = TextStyle(
+                                brush = Brush.linearGradient(
+                                    listOf(Color(0xFF818CF8), Color(0xFFF472B6), Color(0xFFFBBF24)),
+                                ),
+                                fontFamily = FontFamily.Cursive,
+                                fontStyle = FontStyle.Italic,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                letterSpacing = 1.sp,
+                            ),
+                        )
+                    }
                 },
                 navigationIcon = {
                     if (onAdmin) {
@@ -144,6 +167,17 @@ private fun HomeScreen(vm: AppViewModel) {
                     modifier = Modifier.weight(1f),
                 )
                 Switch(checked = vm.liveAlerts, onCheckedChange = { vm.changeLiveAlerts(it) })
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            ) {
+                Text(
+                    "Notify me about new episodes",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(checked = vm.episodeAlerts, onCheckedChange = { vm.changeEpisodeAlerts(it) })
             }
         }
         Row(

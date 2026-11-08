@@ -163,10 +163,23 @@ object Api {
 
     /** Asks the notify-live server function to send the "Unicast is live" push. Admin only. */
     suspend fun notifyLive(token: String) = withContext(Dispatchers.IO) {
+        sendNotification(token, "{}")
+    }
+
+    /** Tells listeners' phones that a new episode was uploaded. */
+    suspend fun notifyEpisode(token: String, title: String) = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject {
+            put("type", "episode")
+            put("title", title)
+        }.toString()
+        sendNotification(token, payload)
+    }
+
+    private fun sendNotification(token: String, payload: String) {
         val request = Request.Builder()
             .url("${Config.SUPABASE_URL}/functions/v1/notify-live")
             .withKeys(token)
-            .post("{}".toRequestBody(jsonType))
+            .post(payload.toRequestBody(jsonType))
             .build()
         run(request)
         Unit

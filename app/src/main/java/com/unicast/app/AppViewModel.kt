@@ -110,11 +110,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var liveAlerts by mutableStateOf(prefs.getBoolean("live_alerts", true))
         private set
 
+    var episodeAlerts by mutableStateOf(prefs.getBoolean("episode_alerts", true))
+        private set
+
     val recordingSupported: Boolean get() = recorder.supported
 
     init {
         Updater.clearDownloads(app)
         LiveNotifications.setSubscribed(app, liveAlerts)
+        LiveNotifications.setEpisodesSubscribed(app, episodeAlerts)
         restoreSession()
     }
 
@@ -122,6 +126,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         liveAlerts = on
         prefs.edit().putBoolean("live_alerts", on).apply()
         LiveNotifications.setSubscribed(getApplication<Application>(), on)
+    }
+
+    fun changeEpisodeAlerts(on: Boolean) {
+        episodeAlerts = on
+        prefs.edit().putBoolean("episode_alerts", on).apply()
+        LiveNotifications.setEpisodesSubscribed(getApplication<Application>(), on)
+    }
+
+    /** Tells everyone's phones about a new episode. A failure here never blocks the upload. */
+    private fun sendEpisodeNotification(token: String, title: String) {
+        viewModelScope.launch {
+            try {
+                Api.notifyEpisode(token, title)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            }
+        }
     }
 
     // ---------- in-app updates ----------
@@ -734,6 +755,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 pendingRecording = null
                 message = "Uploaded. Your episode is live."
                 loadEpisodes()
+                sendEpisodeNotification(token, clean)
             } catch (e: Exception) {
                 report(e)
             } finally {

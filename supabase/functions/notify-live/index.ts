@@ -1,9 +1,10 @@
 // Supabase Edge Function: notify-live
 //
-// Sends the "Unicast is live" push notification to every phone subscribed to the "live" topic.
-//   - Only the signed-in admin can trigger it.
-//   - Only works while the live flag is on.
-//   - Will not send again within 2 minutes, so going live twice does not spam listeners.
+// Sends push notifications to phones that have the app:
+//   - Default: "Unicast is live" to the "live" topic.
+//       Only while the live flag is on, and not again within 2 minutes.
+//   - Body {"type":"episode","title":"..."}: "New episode" to the "episodes" topic.
+//   - Only the signed-in admin can trigger either.
 //
 // Secret to add in Supabase > Edge Functions > Secrets:
 //   FIREBASE_SERVICE_ACCOUNT  = the full contents of the Firebase service account JSON file
@@ -120,7 +121,46 @@ Deno.serve(async (req) => {
     return json({ error: "FIREBASE_SERVICE_ACCOUNT is not valid JSON." }, 500);
   }
 
+  let kind = "live";
+  let episodeTitle = "";
   try {
+    const body = await req.json();
+    if (body?.type === "episode") {
+      kind = "episode";
+      episodeTitle = String(body.title ?? "").slice(0, 120);
+    }
+  } catch (_) {
+    // No body means the go-live notification.
+  }
+
+  try {
+    if (kind === "episode") {
+      const token = await googleAccessToken(account);
+      const push = await fetch(
+        `https://fcm.googleapis.com/v1/projects/${account.project_id}/messages:send`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: {
+              topic: "episodes",
+              notification: { title: "New episode", body: episodeTitle || "A new episode is out. Tap to listen." },
+              android: {
+                priority: "HIGH",
+                ttl: "86400s",
+                notification: { channel_id: "episodes" },
+              },
+            },
+          }),
+        },
+      );
+      const out = await push.json();
+      if (!push.ok) {
+        return json({ error: `Push failed: ${out?.error?.message ?? push.status}` }, 502);
+      }
+      return json({ sent: true });
+    }
+
     // Only while live, and not again within 2 minutes.
     const statusRes = await fetch(
       `${SUPABASE_URL}/rest/v1/live_status?select=is_live,last_notified_at&id=eq.1`,
