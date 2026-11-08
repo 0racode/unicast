@@ -143,7 +143,7 @@ private fun HomeScreen(vm: AppViewModel) {
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )
-                Switch(checked = vm.liveAlerts, onCheckedChange = { vm.setLiveAlerts(it) })
+                Switch(checked = vm.liveAlerts, onCheckedChange = { vm.changeLiveAlerts(it) })
             }
         }
         Row(

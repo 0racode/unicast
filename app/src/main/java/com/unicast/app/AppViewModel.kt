@@ -118,7 +118,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         restoreSession()
     }
 
-    fun setLiveAlerts(on: Boolean) {
+    fun changeLiveAlerts(on: Boolean) {
         liveAlerts = on
         prefs.edit().putBoolean("live_alerts", on).apply()
         LiveNotifications.setSubscribed(getApplication<Application>(), on)
