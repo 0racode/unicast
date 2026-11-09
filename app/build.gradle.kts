@@ -40,6 +40,8 @@ android {
         jniLibs {
             // Store the native audio engine compressed inside the APK for a smaller download.
             useLegacyPackaging = true
+            // Emulator-only builds of the audio engine are never needed on a phone.
+            excludes += listOf("lib/x86/**", "lib/x86_64/**")
         }
     }
 
