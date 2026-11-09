@@ -61,7 +61,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: unicast-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/*.apk
 
       # Only properly signed builds become releases, so the in-app updater never offers a bad one.
       - name: Publish the APK as a release
@@ -69,7 +69,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Unicast.apk
+          out=app/build/outputs/apk/debug
+          ls -l "$out"
+          cp "$out/app-universal-debug.apk" Unicast.apk
+          cp "$out/app-arm64-v8a-debug.apk" Unicast-arm64.apk
+          cp "$out/app-armeabi-v7a-debug.apk" Unicast-arm32.apk
+          # The first file is what older installed versions download, so it must be the universal one.
           gh release create "build-${{ github.run_number }}" Unicast.apk \
             --title "Unicast build ${{ github.run_number }}" \
             --notes-file RELEASE_NOTES.md
+          gh release upload "build-${{ github.run_number }}" Unicast-arm64.apk
+          gh release upload "build-${{ github.run_number }}" Unicast-arm32.apk

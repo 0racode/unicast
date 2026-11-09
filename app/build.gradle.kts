@@ -22,10 +22,17 @@ android {
         // GitHub passes the build number in, so every release has a higher version than the last.
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("versionName") as String?) ?: "0.1.0"
+    }
 
-        // Phones only. Drops the emulator-only x86 builds of the audio engine to shrink the APK.
-        ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+    // One smaller APK per phone type, so each person downloads only the audio engine their phone
+    // can use. Emulator-only (x86) builds are left out. The universal APK is kept for one release so
+    // older installed versions can still update; it will be dropped afterwards.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a")
+            isUniversalApk = true
         }
     }
 

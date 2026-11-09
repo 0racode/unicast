@@ -67,6 +67,20 @@ object Updater {
         runCatching { File(context.cacheDir, "updates").deleteRecursively() }
     }
 
+    /** Chooses the smaller download made for this phone's processor, else any APK. */
+    private fun pickApk(assets: List<GhAsset>): GhAsset? {
+        val apks = assets.filter { it.name.endsWith(".apk") }
+        for (abi in Build.SUPPORTED_ABIS) {
+            val tag = when (abi) {
+                "arm64-v8a" -> "arm64"
+                "armeabi-v7a" -> "arm32"
+                else -> continue
+            }
+            apks.firstOrNull { it.name.contains(tag) }?.let { return it }
+        }
+        return apks.firstOrNull()
+    }
+
     /** Returns the newer version if there is one, otherwise null. Never throws. */
     suspend fun check(context: Context): UpdateInfo? = withContext(Dispatchers.IO) {
         val request = Request.Builder()
@@ -78,8 +92,7 @@ object Updater {
                 if (!response.isSuccessful) return@withContext null
                 val release = json.decodeFromString<GhRelease>(response.body?.string().orEmpty())
                 val code = release.tag.removePrefix("build-").toIntOrNull() ?: return@withContext null
-                val apk = release.assets.firstOrNull { it.name.endsWith(".apk") }
-                    ?: return@withContext null
+                val apk = pickApk(release.assets) ?: return@withContext null
                 if (code <= installedVersionCode(context)) {
                     null
                 } else {

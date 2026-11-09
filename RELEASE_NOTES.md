@@ -1,1 +1,1 @@
-- Live shows now show a title and description, so you know what the show is about before you join.
+- The app download is now smaller, because each phone gets only the parts it needs.
